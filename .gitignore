@@ -1,15 +1,29 @@
-#IntelliJ IDEA Project Files
+# IntelliJ IDEA
+.idea/
 *.iml
-.idea
 
-*.out
-*.class
+# Eclipse
+.classpath
+.project
+.settings/
+
+# NetBeans
+nbproject/
+build/
+
+# Maven build output
 target/
 
-# Package Files #
+# Compiled JARs
 *.jar
-*.war
-*.ear
+!cloudsim-cloudsim-4.0/
 
-# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
-hs_err_pid*
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# GitHub
+cloudsim-4.0.jar

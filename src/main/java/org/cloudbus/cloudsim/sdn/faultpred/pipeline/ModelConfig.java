@@ -55,6 +55,24 @@ public class ModelConfig {
         }
     }
 
+    /** Mini-batch size for LSTM/GRU training. Controls how many samples are
+     *  loaded into INDArrays at once to reduce peak RAM usage.
+     *  Configurable via -Dfaultpred.rnn.batch=32 or FAULTPRED_RNN_BATCH env. */
+    public static int getRnnBatchSize() {
+        String s = firstNonEmpty(
+                System.getProperty("faultpred.rnn.batch"),
+                System.getenv("FAULTPRED_RNN_BATCH"));
+        if (s != null) {
+            try {
+                int t = Integer.parseInt(s);
+                if (t > 0) return t;
+            } catch (NumberFormatException e) {
+                // ignore and fallback
+            }
+        }
+        return 32; // default batch size
+    }
+
     private static String firstNonEmpty(String... values) {
         for (String value : values) {
             if (value != null && !value.trim().isEmpty()) {

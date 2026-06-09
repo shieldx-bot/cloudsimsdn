@@ -31,6 +31,7 @@ import weka.classifiers.meta.FilteredClassifier;
 import weka.filters.unsupervised.attribute.Standardize;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
@@ -309,6 +310,7 @@ public class ClassificationModel implements AutoCloseable {
         private int sequenceLength = 8;
         private int hidden = 64;
         private int epochs = 400;
+        private int batchSize = 32;
         private double focalGamma = 2.0;
         private double focalAlpha = 0.25;
         private boolean useFocalLoss = true;
@@ -329,6 +331,7 @@ public class ClassificationModel implements AutoCloseable {
 
         void setHidden(int hidden) { this.hidden = Math.max(8, hidden); }
         void setEpochs(int epochs) { this.epochs = Math.max(1, epochs); }
+        void setBatchSize(int batchSize) { this.batchSize = Math.max(1, batchSize); }
         void setFocalLoss(boolean enabled, double gamma, double alpha) {
             this.useFocalLoss = enabled;
             this.focalGamma = gamma;
@@ -354,9 +357,52 @@ public class ClassificationModel implements AutoCloseable {
             windows = (double[][][]) augmented[0];
             y = (int[]) augmented[1];
             network = buildNetwork();
-            DataSet train = buildSequenceDataSet(windows, y);
+
+            // --- Mini-batch training to reduce peak RAM usage ---
+            // Instead of loading all samples into one giant DataSet (which
+            // allocates large INDArrays for the full dataset), we iterate
+            // through shuffled mini-batches each epoch. Only one batch is
+            // materialised as an INDArray at a time, then immediately freed.
+            int n = windows.length;
+            int effectiveBatch = Math.min(batchSize, n);
+
+            // Pre-build index array for shuffling
+            Integer[] indices = new Integer[n];
+            for (int i = 0; i < n; i++) indices[i] = i;
+
+            System.out.printf("Mini-batch training: %d samples, batch size %d, %d epochs%n",
+                    n, effectiveBatch, epochs);
+
             for (int epoch = 0; epoch < epochs; epoch++) {
-                network.fit(train);
+                // Shuffle indices each epoch for stochastic gradient descent
+                List<Integer> indexList = java.util.Arrays.asList(indices);
+                java.util.Collections.shuffle(indexList);
+
+                for (int start = 0; start < n; start += effectiveBatch) {
+                    int end = Math.min(n, start + effectiveBatch);
+                    int batchLen = end - start;
+
+                    // Build a small DataSet for this batch only
+                    INDArray feat = Nd4j.zeros(batchLen, inputSize, sequenceLength);
+                    INDArray lbl = Nd4j.zeros(batchLen, NUM_CLASSES, sequenceLength);
+                    INDArray mask = Nd4j.zeros(batchLen, sequenceLength);
+
+                    for (int b = 0; b < batchLen; b++) {
+                        int idx = indexList.get(start + b);
+                        fillWindow(feat, b, windows[idx], sequenceLength);
+                        int cls = sanitizeClass(y[idx]);
+                        lbl.putScalar(new int[] { b, cls, sequenceLength - 1 }, 1.0);
+                        mask.putScalar(new int[] { b, sequenceLength - 1 }, 1.0);
+                    }
+
+                    DataSet batch = new DataSet(feat, lbl, null, mask);
+                    network.fit(batch);
+                    // batch, feat, lbl, mask go out of scope here and can be GC'd
+                }
+
+                if ((epoch + 1) % 50 == 0 || epoch == epochs - 1) {
+                    System.out.printf("  Epoch %d/%d completed%n", epoch + 1, epochs);
+                }
             }
         }
 
@@ -591,6 +637,8 @@ public class ClassificationModel implements AutoCloseable {
         }
         recurrentModel = new RecurrentFaultClassifier(
                 algorithm == Algorithm.LSTM ? RecurrentFaultClassifier.Cell.LSTM : RecurrentFaultClassifier.Cell.GRU);
+        // Apply configured batch size to reduce peak RAM usage
+        recurrentModel.setBatchSize(ModelConfig.getRnnBatchSize());
         recurrentModel.trainWindows(windows, y);
         this.trainSummary = recurrentModel.getSummary();
     }
